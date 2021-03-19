@@ -1,29 +1,4 @@
-2
-3
-4
-5
-6
-7
-8
-9
-10
-11
-12
-13
-14
-15
-16
-17
-18
-19
-20
-21
-22
-23
-24
-25
-26
-var config = {
+const config = {
   type: Phaser.AUTO,
   parent: 'phaser-example',
   width: 800,
@@ -39,13 +14,133 @@ var config = {
     preload: preload,
     create: create,
     update: update
-  } 
+  }
 };
- 
-var game = new Phaser.Game(config);
- 
-function preload() {}
- 
-function create() {}
- 
-function update() {}
+
+const game = new Phaser.Game(config);
+
+function preload() {
+  this.load.image('ship', 'assets/spaceship.png');
+  this.load.image('otherPlayer', 'assets/enemy.png');
+  this.load.image('star', 'assets/star_gold.png');
+}
+
+function create() {
+  const self = this;
+  this.socket = io();
+  this.otherPlayers = this.physics.add.group();
+
+  this.socket.on('currentPlayers', players => {
+    Object.keys(players).forEach(id => {
+      if (players[id].playerId === self.socket.id) {
+        addPlayer(self, players[id]);
+      } else {
+        addOtherPlayers(self, players[id]);
+      }
+    });
+  });
+
+  this.socket.on('newPlayer', playerInfo => {
+    addOtherPlayers(self, playerInfo);
+  });
+
+  this.socket.on('disconnect', playerId => {
+    self.otherPlayers.getChildren().forEach(otherPlayer => {
+      if (playerId === otherPlayer.playerId) {
+        otherPlayer.destroy();
+      }
+    });
+  });
+
+  this.cursors = this.input.keyboard.createCursorKeys();
+
+  this.socket.on('playerMoved', playerInfo => {
+    self.otherPlayers.getChildren().forEach(otherPlayer => {
+      if (playerInfo.playerId === otherPlayer.playerId) {
+        otherPlayer.setRotation(playerInfo.rotation);
+        otherPlayer.setPosition(playerInfo.x, playerInfo.y);
+      }
+    });
+  });
+
+  this.blueScoreText = this.add.text(16, 16, '', { fontSize: '32px', fill: '#0000FF' });
+  this.redScoreText = this.add.text(584, 16, '', { fontSize: '32px', fill: '#FF0000' });
+
+  this.socket.on('scoreUpdate', scores => {
+    self.blueScoreText.setText('Blue: ' + scores.blue);
+    self.redScoreText.setText('Red: ' + scores.red);
+  });
+
+  this.socket.on('starLocation', starLocation => {
+    if (self.star) self.star.destroy();
+    self.star = self.physics.add.image(starLocation.x, starLocation.y, 'star');
+    self.physics.add.overlap(self.ship, self.star, () => {
+      self.star.destroy();
+      this.socket.emit('starCollected');
+    }, null, self);
+  })
+}
+
+function update() {
+  if (this.ship) {
+    if (this.cursors.left.isDown) {
+      this.ship.setAngularVelocity(-150);
+    } else if (this.cursors.right.isDown) {
+      this.ship.setAngularVelocity(150);
+    } else {
+      this.ship.setAngularVelocity(0);
+    }
+
+    if (this.cursors.up.isDown) {
+      this.physics.velocityFromRotation(this.ship.rotation + 1.5, 100, this.ship.body.acceleration);
+    } else {
+      this.ship.setAcceleration(0);
+    }
+
+    this.physics.world.wrap(this.ship, 5);
+
+    // emit player movement
+    const x = this.ship.x;
+    const y = this.ship.y;
+    const r = this.ship.rotation;
+    if (this.ship.oldPosition && (x !== this.ship.oldPosition.x || y !== this.ship.oldPosition.y || r !== this.ship.oldPosition.rotation)) {
+      this.socket.emit('playerMovement', { x: this.ship.x, y: this.ship.y, rotation: this.ship.rotation });
+    }
+
+    // save old position data
+    this.ship.oldPosition = {
+      x: this.ship.x,
+      y: this.ship.y,
+      rotation: this.ship.rotation
+    };
+  }
+}
+
+function addPlayer(self, playerInfo) {
+  self.ship = self.physics.add
+    .image(playerInfo.x, playerInfo.y, 'ship')
+    .setOrigin(0.5, 0.5)
+    .setDisplaySize(53, 40);
+  if (playerInfo.team === 'blue') {
+    self.ship.setTint(0x0000ff);
+  } else {
+    self.ship.setTint(0xff0000);
+  }
+  self.ship.setDrag(100);
+  self.ship.setAngularDrag(100);
+  self.ship.setMaxVelocity(200);
+}
+
+function addOtherPlayers(self, playerInfo) {
+  const otherPlayer = self.add
+    .sprite(playerInfo.x, playerInfo.y, 'otherPlayer')
+    .setOrigin(0.5, 0.5)
+    .setDisplaySize(53, 40);
+  if (playerInfo.team === 'blue') {
+    otherPlayer.setTint(0x0000ff);
+  } else {
+    otherPlayer.setTint(0xff0000);
+  }
+  otherPlayer.playerId = playerInfo.playerId;
+  self.otherPlayers.add(otherPlayer);
+}
